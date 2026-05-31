@@ -1,0 +1,6 @@
+openai
+pymupdf
+python-dotenv
+qdrant-client
+pymupdf4llm
+openpyxl

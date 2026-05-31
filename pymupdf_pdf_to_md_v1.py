@@ -2,8 +2,8 @@ import time
 import pymupdf4llm
 from pathlib import Path
 
-INPUT_DIR  = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_217")
-OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+INPUT_DIR  = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\demo_217")
+OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\demo_markdowns")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 def convert_all():

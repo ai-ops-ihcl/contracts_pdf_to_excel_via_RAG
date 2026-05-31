@@ -4,3 +4,6 @@ contract_summary_217/
 demo_217/
 demo_markdowns/
 pymupdf_markdowns/
+
+.env
+__pycache__/

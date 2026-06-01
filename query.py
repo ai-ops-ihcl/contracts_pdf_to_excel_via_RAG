@@ -297,7 +297,7 @@ def ask(question: str):
 if __name__ == "__main__":
     ask("Find all hotels where management fee is above 2%")
     ask("Show me all hotel opening dates")
-    ask("Which contracts are valid up to after 2040?")
+    ask("Which contracts are valid up to  before 2030?")
     ask("Find hotels with area of protection clauses")
 
     qdrant_client.close()

@@ -35,10 +35,8 @@ CORE_KEYS = [
     "Name of Hotel",
     "Hotel Opening Date",
     "No. of Rooms",
-    "Site Details",  
+    "Site Details",
 
-    "Termination by Owner",
-    "Termination by Operator",
     # Fee-related
     "Management Fee",
     "Incentive Fee",
@@ -46,6 +44,11 @@ CORE_KEYS = [
     "Sales & Marketing Fee",
     "Central Group Services Fee",
     "Loyalty Program Fee",
+
+    # Termination
+    "Termination at Will",
+    "Termination by Owner",
+    "Termination by Operator",
 ]
 
 # Semantic fallback: discard results below this cosine similarity score
@@ -62,8 +65,156 @@ openai_client = AzureOpenAI(
 )
 qdrant_client = QdrantClient(path=QDRANT_PATH)
 
+
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 1 — EMBEDDING (for semantic fallback only)
+# FUNCTION 1 — SCROLL ALL (paginated, safe for large collections)
+# ─────────────────────────────────────────────────────────────
+
+def scroll_all(scroll_filter=None, payload_fields=None) -> list:
+    """
+    Paginated scroll through Qdrant collection.
+    Handles any collection size — keeps scrolling until
+    next_offset is None.
+
+    Args:
+        scroll_filter: Optional Qdrant Filter to scope results.
+        payload_fields: Optional list of payload field names to return.
+                        Reduces data transferred if you only need e.g. ["hotel_name"].
+                        None = return full payload.
+
+    Returns:
+        List of all matching Qdrant point records.
+    """
+    all_points = []
+    offset = None
+
+    while True:
+        points, next_offset = qdrant_client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=scroll_filter,
+            limit=500,
+            offset=offset,
+            with_payload=payload_fields if payload_fields else True,
+            with_vectors=False
+        )
+        all_points.extend(points)
+
+        if next_offset is None:
+            break
+        offset = next_offset
+
+    return all_points
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNCTION 2 — GET ALL HOTEL NAMES (paginated)
+# ─────────────────────────────────────────────────────────────
+
+def get_all_hotels() -> list:
+    """
+    Get sorted list of all unique hotel names in the collection.
+    Uses paginated scroll — safe for any collection size.
+    """
+    all_points = scroll_all(payload_fields=["hotel_name"])
+
+    hotels = sorted(set(
+        p.payload.get("hotel_name", "")
+        for p in all_points
+        if p.payload.get("hotel_name")
+    ))
+    return hotels
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNCTION 3 — FETCH ALL CHUNKS FOR ONE HOTEL
+# ─────────────────────────────────────────────────────────────
+
+def fetch_hotel_chunks(hotel_name: str) -> list:
+    """
+    Fetch ALL chunks for a single hotel in ONE paginated scroll.
+    Returns list of payload dicts (not Qdrant point objects).
+
+    This is the key optimization: one query per hotel,
+    then all matching happens in-memory.
+    """
+    hotel_filter = Filter(must=[
+        FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
+    ])
+
+    points = scroll_all(scroll_filter=hotel_filter)
+    return [point.payload for point in points]
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNCTION 4 — LOCAL MATCHING (exact + fuzzy, no API calls)
+# ─────────────────────────────────────────────────────────────
+
+def normalize_key(text: str) -> str:
+    """
+    Normalize key text for comparison.
+    Handles <br> artifacts, extra whitespace, casing.
+    """
+    text = text.lower().strip()
+    text = re.sub(r'<br\s*/?>', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+
+def find_exact_match(core_key: str, hotel_chunks: list) -> dict | None:
+    """
+    Exact match: normalized core_key == normalized chunk key_name.
+    Cost: zero (in-memory).
+    """
+    target = normalize_key(core_key)
+
+    for chunk in hotel_chunks:
+        if normalize_key(chunk.get("key_name", "")) == target:
+            return chunk
+
+    return None
+
+
+def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
+    """
+    Fuzzy substring match:
+        core_key is contained in chunk key_name
+        OR chunk key_name is contained in core_key
+
+    Handles naming variations like:
+        "Termination by Owner"  in  "Termination by Owner/Operator"
+        "Sales & Marketing Fee" in  "Sales & Marketing Fee & CGS Fee"
+
+    If multiple chunks match, picks the one with highest word overlap.
+
+    Cost: zero (in-memory).
+    """
+    target = normalize_key(core_key)
+    target_words = set(target.split())
+
+    best_match = None
+    best_overlap = 0
+
+    for chunk in hotel_chunks:
+        chunk_key = normalize_key(chunk.get("key_name", ""))
+
+        # Substring check (either direction)
+        if target in chunk_key or chunk_key in target:
+            # Score by word overlap ratio (higher = more relevant)
+            chunk_words = set(chunk_key.split())
+            overlap = len(target_words & chunk_words)
+            total = max(len(target_words), len(chunk_words), 1)
+            score = overlap / total
+
+            if score > best_overlap:
+                best_overlap = score
+                best_match = chunk
+
+    return best_match
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNCTION 5 — SEMANTIC SEARCH (expensive, last resort)
+#   Uses query_points() — the new API (qdrant-client >= 1.12)
 # ─────────────────────────────────────────────────────────────
 
 def get_embedding(text: str) -> list:
@@ -74,51 +225,27 @@ def get_embedding(text: str) -> list:
     )
     return response.data[0].embedding
 
-# ─────────────────────────────────────────────────────────────
-# FUNCTION 2 — KEYWORD SEARCH (exact match on Qdrant payload)
-# ─────────────────────────────────────────────────────────────
 
-def keyword_search(key_name: str, hotel_name: str = None, limit: int = 100) -> list:
+def semantic_search(query: str, hotel_name: str, top_k: int = 3) -> list:
     """
-    Exact keyword filter on key_name (and optionally hotel_name).
-    Returns list of chunk payloads directly from Qdrant.
-    """
-    conditions = [
-        FieldCondition(key="key_name", match=MatchValue(value=key_name))
-    ]
-    if hotel_name:
-        conditions.append(
-            FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
-        )
+    Embed query and search Qdrant by cosine similarity,
+    filtered to a single hotel's chunks.
 
-    results = qdrant_client.scroll(
-        collection_name=COLLECTION_NAME,
-        scroll_filter=Filter(must=conditions),
-        limit=limit,
-        with_payload=True,
-        with_vectors=False
-    )[0]
+    This is the EXPENSIVE fallback — only called when
+    both exact and fuzzy match fail.
 
-    return [point.payload for point in results]
-
-# ─────────────────────────────────────────────────────────────
-# FUNCTION 3 — SEMANTIC SEARCH (cosine similarity fallback)
-#   Uses query_points() — the new API (qdrant-client >= 1.12)
-# ─────────────────────────────────────────────────────────────
-
-def semantic_search(query: str, top_k: int = 5) -> list:
-    """
-    Embed query and search Qdrant by cosine similarity.
-    Returns list of payloads with scores.
-    Used ONLY when keyword search returns 0 results.
-
-    NOTE: Uses query_points() (not the deprecated .search() method).
+    Returns list of payloads with scores, sorted by score desc.
     """
     query_vector = get_embedding(query)
+
+    query_filter = Filter(must=[
+        FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
+    ])
 
     results = qdrant_client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
+        query_filter=query_filter,
         limit=top_k,
         with_payload=True
     )
@@ -128,82 +255,89 @@ def semantic_search(query: str, top_k: int = 5) -> list:
         for point in results.points
     ]
 
+
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 4 — RETRIEVE CORE ATTRIBUTES
-#   Keyword-first, semantic-fallback per key
+# FUNCTION 6 — RETRIEVE CORE ATTRIBUTES (HOTEL-CENTRIC)
+#   Processes ONE hotel at a time
+#   3-tier: exact -> fuzzy -> semantic
 # ─────────────────────────────────────────────────────────────
 
-def retrieve_core_attributes(hotel_name: str = None) -> list:
+def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
     """
-    Retrieve the fixed set of core attributes from Qdrant.
+    Retrieve the fixed set of core attributes for a SINGLE hotel.
+
+    All matching runs against pre-fetched hotel_chunks (in-memory).
+    Semantic search (API call) is only used as last resort.
 
     Strategy for each key in CORE_KEYS:
-      Step 1: keyword_search(key_name) -> exact match on payload
-              Found? -> use it, skip to next key
-      Step 2: semantic_search(key_name) -> catches naming variations
-              e.g., "Name of Hotel" ~ "Name of Hotels"
-              Filtered by score > 0.40
-              If hotel_name specified, further filtered to that hotel
+      Step 1: Exact match   (in-memory, free)   — key_name == core_key
+      Step 2: Fuzzy match   (in-memory, free)   — substring overlap
+      Step 3: Semantic search (API call, costly) — cosine similarity
 
-    Deduplicates by (hotel_name, key_name).
+    Each returned chunk is tagged with:
+      - "core_key":          which CORE_KEY column this fills
+      - "retrieval_method":  "exact", "fuzzy", or "semantic"
 
     Args:
-        hotel_name: If provided, retrieves only for that hotel.
-                    If None, retrieves across ALL hotels.
+        hotel_name:   The exact hotel_name as stored in Qdrant payload.
+        hotel_chunks: Pre-fetched list of all chunk payloads for this hotel.
 
     Returns:
-        List of raw chunk payloads (exact data from Qdrant).
+        List of chunk payloads for this hotel (one per matched CORE_KEY).
     """
-    all_chunks = []
-    seen = set()  # (hotel_name, key_name) dedup tracker
+    chunks = []
 
     for key in CORE_KEYS:
-        # ── Step 1: Keyword search (exact match) ──────────────
-        results = keyword_search(key_name=key, hotel_name=hotel_name)
 
-        if results:
-            for chunk in results:
-                dedup_key = (chunk.get("hotel_name", ""), chunk.get("key_name", ""))
-                if dedup_key not in seen:
-                    seen.add(dedup_key)
-                    chunk["retrieval_method"] = "keyword"
-                    all_chunks.append(chunk)
-            print(f"    [OK] '{key}' -> {len(results)} chunk(s) via keyword search")
-            continue  # Found via keyword -> skip semantic
+        # ── Step 1: Exact match (free) ────────────────────────
+        match = find_exact_match(key, hotel_chunks)
+        if match:
+            match["retrieval_method"] = "exact"
+            match["core_key"] = key
+            chunks.append(match)
+            print(f"    [EXACT]    '{key}'")
+            continue
 
-        # ── Step 2: Semantic fallback ─────────────────────────
-        fallback_query = f"{key} {hotel_name}" if hotel_name else key
-        sem_results = semantic_search(fallback_query, top_k=5)
+        # ── Step 2: Fuzzy match (free) ────────────────────────
+        match = find_fuzzy_match(key, hotel_chunks)
+        if match:
+            match["retrieval_method"] = "fuzzy"
+            match["core_key"] = key
+            chunks.append(match)
+            print(f"    [FUZZY]    '{key}' -> '{match.get('key_name', '?')}'")
+            continue
 
-        # Filter by score threshold
-        sem_results = [r for r in sem_results if r.get("score", 0) > SEMANTIC_SCORE_THRESHOLD]
+        # # ── Step 3: Semantic fallback (costs 1 embedding call) ─
+        # sem_results = semantic_search(
+        #     query=key, hotel_name=hotel_name, top_k=3
+        # )
 
-        # If hotel_name specified, further filter to matching hotel
-        if hotel_name:
-            sem_results = [
-                r for r in sem_results
-                if hotel_name.lower() in r.get("hotel_name", "").lower()
-            ]
+        # # Filter by score threshold
+        # sem_results = [
+        #     r for r in sem_results
+        #     if r.get("score", 0) > SEMANTIC_SCORE_THRESHOLD
+        # ]
 
-        added = 0
-        for chunk in sem_results:
-            dedup_key = (chunk.get("hotel_name", ""), chunk.get("key_name", ""))
-            if dedup_key not in seen:
-                seen.add(dedup_key)
-                chunk["retrieval_method"] = "semantic"
-                all_chunks.append(chunk)
-                added += 1
+        # if sem_results:
+        #     best = sem_results[0]
+        #     best["retrieval_method"] = "semantic"
+        #     best["core_key"] = key
+        #     chunks.append(best)
+        #     print(
+        #         f"    [SEMANTIC] '{key}' -> '{best.get('key_name', '?')}' "
+        #         f"(score={best.get('score', 0):.4f})"
+        #     )
+        # else:
+        #     print(f"    [MISS]     '{key}'")
 
-        if added > 0:
-            print(f"    [SEMANTIC] '{key}' -> {added} chunk(s) via semantic fallback")
-        else:
-            print(f"    [MISS] '{key}' -> not found (keyword miss + semantic below threshold)")
+        print(f"    [MISS]     '{key}'")
 
-    return all_chunks
+    return chunks
+
 
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 5 — FUZZY KEY MATCHING
-#   Handles naming variations from semantic fallback
+# FUNCTION 7 — FIND VALUE FOR KEY (Excel column mapping)
+#   Maps CORE_KEY column name -> chunk value
 # ─────────────────────────────────────────────────────────────
 
 def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
@@ -211,14 +345,10 @@ def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
     Find the value for a given CORE_KEY from a hotel's chunks.
 
     Matching strategy (in order):
-      1. Exact match:    chunk key_name == core_key  (case-insensitive)
-      2. Fuzzy match:    core_key is contained in chunk key_name
-                         OR chunk key_name is contained in core_key
-                         (case-insensitive)
-
-    This handles semantic fallback variations like:
-      "Sales & Marketing Fee" matching "Sales & Marketing Fee & Central Group Services Fee"
-      "Earnest Money Deposit / Key Money" matching "Earnest Money Deposit"
+      0. Tagged match:  chunk was tagged with core_key during retrieval
+      1. Exact match:   chunk key_name == core_key  (case-insensitive)
+      2. Fuzzy match:   core_key is contained in chunk key_name
+                        OR chunk key_name is contained in core_key
 
     Args:
         core_key:     The CORE_KEY column name to find.
@@ -227,28 +357,35 @@ def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
     Returns:
         The chunk's "value" field, or "N/A" if not found.
     """
+    
     core_lower = core_key.lower().strip()
+
+    # Pass 0: Tagged match
+    for chunk in hotel_chunks:
+        if chunk.get("core_key", "").lower().strip() == core_lower:
+            raw = chunk.get("value", "").strip()
+            return raw if raw else "N/A"
 
     # Pass 1: Exact match
     for chunk in hotel_chunks:
-        chunk_key = chunk.get("key_name", "").strip()
-        chunk_lower = chunk_key.lower()
+        if normalize_key(chunk.get("key_name", "")) == core_lower:
+            raw = chunk.get("value", "").strip()
+            return raw if raw else "N/A"
 
-        if chunk_lower == core_lower:
-            return chunk.get("value", "N/A")
-
-    # Pass 2: Fuzzy match (substring — only if exact match not found)
+    # Pass 2: Fuzzy match
     for chunk in hotel_chunks:
-        chunk_key = chunk.get("key_name", "").strip()
-        chunk_lower = chunk_key.lower()
-
+        chunk_lower = normalize_key(chunk.get("key_name", ""))
         if core_lower in chunk_lower or chunk_lower in core_lower:
-            return chunk.get("value", "N/A")
+            raw = chunk.get("value", "").strip()
+            return raw if raw else "N/A"
 
-    return "N/A"
+    # Key not found at all
+    return "NOT FOUND"
+
+
 
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 6 — EXPORT TO EXCEL (PIVOTED — one row per hotel)
+# FUNCTION 8 — EXPORT TO EXCEL (PIVOTED — one row per hotel)
 # ─────────────────────────────────────────────────────────────
 
 # ── Style constants ────────────────────────────────────────────
@@ -295,7 +432,6 @@ def export_to_excel(chunks: list) -> Path:
     title_cell.font = TITLE_FONT
     title_cell.fill = TITLE_FILL
     title_cell.alignment = TITLE_ALIGN
-    # Apply title fill across all merged cells
     for col in range(1, len(headers) + 1):
         ws.cell(row=1, column=col).fill = TITLE_FILL
     ws.row_dimensions[1].height = 28
@@ -325,10 +461,7 @@ def export_to_excel(chunks: list) -> Path:
     for hotel_name in sorted(hotel_groups.keys()):
         hotel_chunks = hotel_groups[hotel_name]
 
-        # Get metadata from any chunk in this hotel's group
         agreement_type = hotel_chunks[0].get("agreement_type", "N/A") or "N/A"
-
-        # Determine row fill (alternating)
         row_fill = ALT_ROW_FILL if serial % 2 == 0 else WHITE_FILL
 
         # Column 1: Serial #
@@ -353,7 +486,6 @@ def export_to_excel(chunks: list) -> Path:
             cell.border = THIN_BORDER
             cell.fill = row_fill
 
-        # Center-align the # column
         ws.cell(row=row_idx, column=1).alignment = Alignment(
             horizontal="center", vertical="top"
         )
@@ -363,13 +495,12 @@ def export_to_excel(chunks: list) -> Path:
 
     total_data_rows = row_idx - header_row - 1
 
-    # ── Column widths (fixed, clean) ──────────────────────────
+    # ── Column widths ─────────────────────────────────────────
     col_widths = {
         1: 5,     # #
         2: 45,    # File Name
         3: 25,    # Agreement Type
     }
-    # CORE_KEY columns: auto-calculate but cap at 40
     for i in range(len(CORE_KEYS)):
         col_num = 4 + i
         header_len = len(CORE_KEYS[i])
@@ -393,13 +524,21 @@ def export_to_excel(chunks: list) -> Path:
     wb.save(str(out_path))
     return out_path
 
+
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 7 — RUN (Orchestrator)
+# FUNCTION 9 — RUN (Orchestrator — hotel-centric)
 # ─────────────────────────────────────────────────────────────
 
 def run(hotel_name: str = None):
     """
-    Main entry point. Retrieves core attributes and exports to Excel.
+    Main entry point.
+
+    Design: HOTEL-CENTRIC
+      1. Discover all hotels in Qdrant (paginated, safe for any size)
+      2. For EACH hotel:
+         a. Fetch all chunks ONCE (one Qdrant scroll)
+         b. For each CORE_KEY: exact -> fuzzy -> semantic
+      3. Export pivoted Excel
 
     Args:
         hotel_name: If provided, extract for that hotel only.
@@ -410,42 +549,71 @@ def run(hotel_name: str = None):
     print("  IHCL Hotel Contracts — Core Attribute Extraction")
     print("=" * 60)
 
-    target = hotel_name if hotel_name else "ALL HOTELS"
-    print(f"\n  Target:     {target}")
+    # ── Discover hotels ───────────────────────────────────────
+    if hotel_name:
+        hotels = [hotel_name]
+    else:
+        hotels = get_all_hotels()
+
+    print(f"\n  Hotels:     {len(hotels)}")
     print(f"  Core Keys:  {len(CORE_KEYS)}")
     print(f"  Collection: {COLLECTION_NAME}")
-    print(f"  Strategy:   Keyword search -> Semantic fallback (threshold={SEMANTIC_SCORE_THRESHOLD})")
+    print(f"  Strategy:   Per-hotel -> exact -> fuzzy -> semantic (threshold={SEMANTIC_SCORE_THRESHOLD})")
     print()
 
-    # ── Step 1: Retrieve ──────────────────────────────────────
-    print("[Step 1] Retrieving core attributes...")
-    chunks = retrieve_core_attributes(hotel_name=hotel_name)
+    # ── Step 1: Retrieve per hotel ────────────────────────────
+    print("[Step 1] Retrieving core attributes (hotel-centric)...\n")
+
+    all_chunks = []
+    total_exact = 0
+    total_fuzzy = 0
+    total_semantic = 0
+
+    for idx, hotel in enumerate(hotels, 1):
+        print(f"  [{idx}/{len(hotels)}] 🏨 {hotel}")
+
+        # Fetch all chunks for this hotel ONCE
+        hotel_chunks = fetch_hotel_chunks(hotel)
+        print(f"         ({len(hotel_chunks)} chunks in collection)")
+
+        # Retrieve core attributes using 3-tier matching
+        chunks = retrieve_core_attributes(
+            hotel_name=hotel,
+            hotel_chunks=hotel_chunks
+        )
+        all_chunks.extend(chunks)
+
+        # Per-hotel mini stats
+        exact = sum(1 for c in chunks if c.get("retrieval_method") == "exact")
+        fuzzy = sum(1 for c in chunks if c.get("retrieval_method") == "fuzzy")
+        sem   = sum(1 for c in chunks if c.get("retrieval_method") == "semantic")
+        total_exact += exact
+        total_fuzzy += fuzzy
+        total_semantic += sem
+
+        print(
+            f"         -> {len(chunks)}/{len(CORE_KEYS)} keys found "
+            f"(exact={exact}, fuzzy={fuzzy}, semantic={sem})\n"
+        )
 
     # ── Stats ─────────────────────────────────────────────────
-    hotels_found = sorted(set(c.get("hotel_name", "Unknown") for c in chunks))
-    keys_found = sorted(set(c.get("key_name", "Unknown") for c in chunks))
-    keyword_count = sum(1 for c in chunks if c.get("retrieval_method") == "keyword")
-    semantic_count = sum(1 for c in chunks if c.get("retrieval_method") == "semantic")
+    hotels_found = sorted(set(c.get("hotel_name", "Unknown") for c in all_chunks))
 
-    print(f"\n  Total chunks retrieved: {len(chunks)}")
-    print(f"  Hotels found:           {len(hotels_found)}")
-    print(f"  Keys found:             {len(keys_found)} / {len(CORE_KEYS)}")
-    print(f"  Via keyword search:     {keyword_count}")
-    print(f"  Via semantic fallback:  {semantic_count}")
+    print(f"  {'─' * 50}")
+    print(f"  Total chunks retrieved: {len(all_chunks)}")
+    print(f"  Hotels processed:       {len(hotels_found)}")
+    print(f"  Via exact match:        {total_exact}")
+    print(f"  Via fuzzy match:        {total_fuzzy}")
+    print(f"  Via semantic fallback:  {total_semantic}")
+    print(f"  Embedding API calls:    {total_semantic}  (fuzzy saved {total_fuzzy} calls)")
 
-    if hotels_found:
-        print(f"\n  Hotels:")
-        for h in hotels_found:
-            hotel_chunks = [c for c in chunks if c.get("hotel_name") == h]
-            print(f"    - {h} ({len(hotel_chunks)} attributes)")
-
-    if not chunks:
+    if not all_chunks:
         print("\n  WARNING: No data found. Check Qdrant collection or key names.")
         return None
 
     # ── Step 2: Export (pivoted) ──────────────────────────────
     print(f"\n[Step 2] Exporting to Excel (pivoted: one row per hotel)...")
-    excel_path = export_to_excel(chunks)
+    excel_path = export_to_excel(all_chunks)
     print(f"  Saved: {excel_path}")
 
     print(f"\n{'=' * 60}")
@@ -453,6 +621,7 @@ def run(hotel_name: str = None):
     print(f"{'=' * 60}")
 
     return excel_path
+
 
 # ─────────────────────────────────────────────────────────────
 # MAIN

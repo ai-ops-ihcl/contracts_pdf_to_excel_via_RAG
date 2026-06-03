@@ -36,6 +36,7 @@ CORE_KEYS = [
     "Hotel Opening Date",
     "No. of Rooms",
     "Site Details",
+    "Region",
 
     # Fee-related
     "Management Fee",
@@ -45,10 +46,6 @@ CORE_KEYS = [
     "Central Group Services Fee",
     "Loyalty Program Fee",
 
-    # Termination
-    "Termination at Will",
-    "Termination by Owner",
-    "Termination by Operator",
 ]
 
 # Semantic fallback: discard results below this cosine similarity score
@@ -292,6 +289,7 @@ def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
         # ── Step 1: Exact match (free) ────────────────────────
         match = find_exact_match(key, hotel_chunks)
         if match:
+            match = match.copy()              # ← ADD THIS
             match["retrieval_method"] = "exact"
             match["core_key"] = key
             chunks.append(match)
@@ -301,6 +299,7 @@ def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
         # ── Step 2: Fuzzy match (free) ────────────────────────
         match = find_fuzzy_match(key, hotel_chunks)
         if match:
+            match = match.copy()              # ← ADD THIS
             match["retrieval_method"] = "fuzzy"
             match["core_key"] = key
             chunks.append(match)
@@ -411,6 +410,120 @@ ALT_ROW_FILL   = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type
 WHITE_FILL     = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
 
 
+
+def parse_audit_from_creation_time(audit_trail: dict) -> dict:
+    """
+    Parse maker/checker details from the raw creation_time string.
+    The embedding pipeline stuffed everything into creation_time
+    instead of splitting into individual fields.
+    """
+    result = {
+        "maker_name": "", "maker_email": "", 
+        "maker_decision": "", "maker_date": "",
+        "checker_name": "", "checker_email": "", 
+        "checker_decision": "", "checker_date": "",
+    }
+
+    if not audit_trail:
+        return result
+
+    # First try the individual fields (in case they're populated)
+    if audit_trail.get("maker_name"):
+        result["maker_name"]     = audit_trail["maker_name"]
+        result["maker_email"]    = audit_trail.get("maker_email", "")
+        result["maker_decision"] = audit_trail.get("maker_decision", "")
+        result["maker_date"]     = audit_trail.get("maker_date", "")
+        result["checker_name"]   = audit_trail.get("checker_name", "")
+        result["checker_email"]  = audit_trail.get("checker_email", "")
+        result["checker_decision"] = audit_trail.get("checker_decision", "")
+        result["checker_date"]   = audit_trail.get("checker_date", "")
+        return result
+
+    # Otherwise, parse from creation_time blob
+    raw = audit_trail.get("creation_time", "")
+    if not raw:
+        return result
+
+    # Normalize <br> variants
+    text = re.sub(r'<br\s*/?>', '\n', raw)
+
+    # ── Parse Maker block ─────────────────────────────
+    maker_match = re.search(
+        r'Maker:\s*(.+?)(?:\n|$)', text)
+    if maker_match:
+        result["maker_name"] = maker_match.group(1).strip()
+
+    # Split at the "-----" separator to get maker vs checker sections
+    sections = re.split(r'-{5,}', text)
+    
+    maker_section = sections[0] if len(sections) > 0 else ""
+    checker_section = sections[1] if len(sections) > 1 else ""
+
+    # ── Extract from Maker section ────────────────────
+    m = re.search(r'Maker:\s*(.+?)(?:\n|$)', maker_section)
+    if m:
+        result["maker_name"] = m.group(1).strip()
+
+    m = re.search(r'Email:\s*(.+?)(?:\n|$)', maker_section)
+    if m:
+        result["maker_email"] = m.group(1).strip()
+
+    m = re.search(r'Decision:\s*(.+?)(?:\n|$)', maker_section)
+    if m:
+        result["maker_decision"] = m.group(1).strip()
+
+    m = re.search(r'Response Date:\s*(.+?)(?:\n|$)', maker_section)
+    if m:
+        result["maker_date"] = m.group(1).strip()
+
+    # ── Extract from Checker section ──────────────────
+    m = re.search(r'Checker:\s*(.+?)(?:\n|$)', checker_section)
+    if m:
+        result["checker_name"] = m.group(1).strip()
+
+    m = re.search(r'Email:\s*(.+?)(?:\n|$)', checker_section)
+    if m:
+        result["checker_email"] = m.group(1).strip()
+
+    m = re.search(r'Decision:\s*(.+?)(?:\n|$)', checker_section)
+    if m:
+        result["checker_decision"] = m.group(1).strip()
+
+    m = re.search(r'Response Date:\s*(.+?)(?:\n|$)', checker_section)
+    if m:
+        result["checker_date"] = m.group(1).strip()
+
+    return result
+
+
+
+def format_maker_details(audit_trail: dict) -> str:
+    """Format maker details as multi-line string for Excel cell."""
+    parsed = parse_audit_from_creation_time(audit_trail)
+    name     = parsed["maker_name"] or "N/A"
+    email    = parsed["maker_email"] or "N/A"
+    decision = parsed["maker_decision"] or "N/A"
+    date     = parsed["maker_date"] or "N/A"
+    if name == "N/A" and email == "N/A":
+        return "N/A"
+    return f"Name: {name}\nEmail: {email}\nDecision: {decision}\nDate: {date}"
+
+
+
+
+def format_checker_details(audit_trail: dict) -> str:
+    """Format checker details as multi-line string for Excel cell."""
+    parsed = parse_audit_from_creation_time(audit_trail)
+    name     = parsed["checker_name"] or "N/A"
+    email    = parsed["checker_email"] or "N/A"
+    decision = parsed["checker_decision"] or "N/A"
+    date     = parsed["checker_date"] or "N/A"
+    if name == "N/A" and email == "N/A":
+        return "N/A"
+    return f"Name: {name}\nEmail: {email}\nDecision: {decision}\nDate: {date}"
+
+
+
 def export_to_excel(chunks: list) -> Path:
     """
     Export chunk data to a PIVOTED Excel file.
@@ -421,7 +534,7 @@ def export_to_excel(chunks: list) -> Path:
     ws.title = "Core Attributes"
 
     # ── Define column headers ─────────────────────────────────
-    headers = ["#", "File Name", "Agreement Type"] + CORE_KEYS
+    headers = ["#", "File Name", "Agreement Type"] + CORE_KEYS + ["Maker Details", "Checker Details"]
 
     # ── Row 1: Title bar (full width, light blue background) ──
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -478,6 +591,13 @@ def export_to_excel(chunks: list) -> Path:
             value = find_value_for_key(core_key, hotel_chunks)
             ws.cell(row=row_idx, column=col, value=str(value))
 
+        # Last two columns: Maker and Checker Details (from audit_trail)
+        audit = hotel_chunks[0].get("audit_trail", {}) or {}
+        maker_col   = 4 + len(CORE_KEYS)
+        checker_col = 4 + len(CORE_KEYS) + 1
+        ws.cell(row=row_idx, column=maker_col,   value=format_maker_details(audit))
+        ws.cell(row=row_idx, column=checker_col,  value=format_checker_details(audit))
+
         # Apply styles to entire row
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=row_idx, column=col_idx)
@@ -505,6 +625,8 @@ def export_to_excel(chunks: list) -> Path:
         col_num = 4 + i
         header_len = len(CORE_KEYS[i])
         col_widths[col_num] = min(max(header_len + 4, 20), 40)
+    col_widths[4 + len(CORE_KEYS)]     = 30  # Maker Details
+    col_widths[4 + len(CORE_KEYS) + 1] = 30  # Checker Details
 
     for col_num, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_num)].width = width

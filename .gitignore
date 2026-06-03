@@ -10,3 +10,7 @@ __pycache__/
 query_results/
 qdrant_local/collection/hotel_contracts/storage.sqlite
 reports/*.xlsx
+
+# Qdrant local database
+qdrant_local/
+*.sqlite

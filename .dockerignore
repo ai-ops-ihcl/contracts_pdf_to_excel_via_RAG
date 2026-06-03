@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Data directories (these are mounted as volumes)
+data/
+qdrant_local/
+qdrant_storage/
+
+# Query results (generated at runtime)
+query_results/
+
+# Test/demo data
+demo_*/
+contract_summary_*/
+pymupdf_markdowns/
+
+# Docs
+README.md
+*.md
+
+# Env files (copied separately, contains secrets)
+.env
+env*

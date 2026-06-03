@@ -182,15 +182,16 @@ def pdf_to_chunked_markdown(pdf_path: str) -> str:
 # STEP 4 — BATCH RUN
 # ─────────────────────────────────────────────────────────────
 
-INPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_217")
-OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
-OUTPUT_DIR.mkdir(exist_ok=True)
+if __name__ == "__main__":
+    INPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_217")
+    OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
-for pdf_path in INPUT_DIR.glob("*.pdf"):
-    try:
-        md = pdf_to_chunked_markdown(str(pdf_path))
-        out = OUTPUT_DIR / pdf_path.with_suffix(".md").name
-        out.write_text(md, encoding="utf-8")
-        print(f"✅ {pdf_path.name}")
-    except Exception as e:
-        print(f"❌ {pdf_path.name} → {e}")
+    for pdf_path in INPUT_DIR.glob("*.pdf"):
+        try:
+            md = pdf_to_chunked_markdown(str(pdf_path))
+            out = OUTPUT_DIR / pdf_path.with_suffix(".md").name
+            out.write_text(md, encoding="utf-8")
+            print(f"[OK] {pdf_path.name}")
+        except Exception as e:
+            print(f"[FAIL] {pdf_path.name} -> {e}")

@@ -1,0 +1,70 @@
+==============================================================================
+IHCL CONTRACT PIPELINE - QUICK START GUIDE
+==============================================================================
+
+STEP 1: Clean old Qdrant data (IMPORTANT!)
+-------------------------------------------
+On Windows PowerShell:
+  Remove-Item -Recurse -Force qdrant_local
+
+On Windows CMD:
+  rmdir /s /q qdrant_local
+
+On Linux/Mac:
+  rm -rf qdrant_local
+
+
+STEP 2: Run with Docker (RECOMMENDED)
+--------------------------------------
+  docker-compose up --build -d
+  docker-compose logs -f app
+
+
+STEP 3: Access the application
+-------------------------------
+  API Documentation: http://localhost:8000/docs
+  Health Check:      http://localhost:8000/health
+  Qdrant Dashboard:  http://localhost:6333/dashboard
+
+
+ALTERNATIVE: Run locally without Docker
+----------------------------------------
+  1. Clean old data (see STEP 1)
+  
+  2. Start Qdrant:
+     docker run -d -p 6333:6333 qdrant/qdrant:v1.11.0
+  
+  3. Start FastAPI:
+     uvicorn app.main:app --reload
+  
+  4. Open: http://localhost:8000/docs
+
+
+TEST THE PIPELINE
+-----------------
+  1. Upload PDF via web UI: http://localhost:8000/docs
+     OR
+     curl -X POST "http://localhost:8000/pipeline/upload" \
+       -F "file=@yourfile.pdf" -F "auto_run=true"
+  
+  2. Check status:
+     curl http://localhost:8000/pipeline/status
+  
+  3. Download result:
+     curl -O http://localhost:8000/pipeline/download
+
+
+TROUBLESHOOTING
+---------------
+  • If Qdrant errors: Make sure you deleted qdrant_local folder
+  • If import errors: pip install -r requirements.txt
+  • If stuck: docker-compose restart app
+
+
+MORE INFO
+---------
+  See RUN_COMMANDS.md for detailed instructions
+  See DEPLOYMENT.md for production deployment
+  See DEPLOYMENT_REVIEW.md for technical details
+
+==============================================================================

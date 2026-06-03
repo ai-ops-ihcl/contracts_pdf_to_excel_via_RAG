@@ -42,8 +42,7 @@ CORE_KEYS = [
     "Management Fee",
     "Incentive Fee",
     "Fee Threshold",
-    "Sales & Marketing Fee",
-    "Central Group Services Fee",
+    "Sales & Marketing Fee & Central Group Services Fee",
     "Loyalty Program Fee",
 
 ]

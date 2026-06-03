@@ -26,29 +26,208 @@ OUTPUT_DIR         = Path("./query_results")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────
-# CORE KEYS — The only attributes we extract
-#   Each key becomes a COLUMN in the output Excel
+# CORE KEYS — Canonical output columns in the Excel
+#   Business-facing names. Raw template variants are in ALIAS_MAP.
+#   Composite fields are built from multiple source keys.
 # ─────────────────────────────────────────────────────────────
 
 CORE_KEYS = [
-    # Identity
+    # ── General / Identity ────────────────────────────────────
     "Name of Hotel",
     "Hotel Opening Date",
     "No. of Rooms",
-    "Site Details",
+    "Site Details",                                        # composite: appends "Additional Construction, if any"
     "Region",
+    "Owner / Lessor / Licensor Details and Address",       # alias
+    "Operator / Lessee / Licensee Details and Address",    # alias
+    "Nature of Right of Owner / Lessor / Licensor",        # alias
+    "Nature of Right of Operator / Lessee / Licensee",     # alias
+    "Mortgage Limit",
 
-    # Fee-related
+    # ── Term ──────────────────────────────────────────────────
+    "Original Execution Date",
+    "Original Term",
+    "Valid From",
+    "Valid Up To",
+    "Lock-in Period",                                      # alias: "Lock-in Period, if any"
+
+    # ── Renewal ───────────────────────────────────────────────
+    "Renewal Term",
+    "Conditions of Renewal",
+    "Renewal Notice Period",
+
+    # ── Supplemental / Renewal Agreement ──────────────────────
+    "Supplemental / Renewal Agreement Summary",            # composite: multi-field summary
+
+    # ── Operations ────────────────────────────────────────────
+    "Operations Summary",                                  # composite: Key Personnel + Appointment
+
+    # ── Annual Plan and Budget ────────────────────────────────
+    "Approval of Owner",
+    "Operating Budget",
+    "Reserve Fund Work Budget",
+    "Capital Expenditure",
+    "FF&FE Contribution",
+    "Notional FF&FE",
+    "Working Capital Clause",
+
+    # ── Compensation (Management Agreement) ───────────────────
     "Management Fee",
     "Incentive Fee",
-    "Fee Threshold",
-    "Sales & Marketing Fee",
-    "Central Group Services Fee",
+    "Sales & Marketing Fee & Central Group Services Fee",
     "Loyalty Program Fee",
+    "Reimbursables",
+    "Earnest Money Deposit / Key Money",
+    "Owner's Priority",
 
+    # ── Consideration (Lease / License Agreement) ─────────────
+    "Applicable Fee / Rent Fee / Consideration Payable",
+    "Minimum Guarantee",                                   # alias: "Minimum Guarantee Fee"
+    "Due Date of Payment",                                 # alias: "Due date of Payment"
+    "Interest on Delayed Payment",                         # alias: fused License artifact
+    "Reconciliation Schedule",                             # alias: fused License artifact
+    "Non-Refundable Deposit",                              # alias: "Non Refundable Deposit"
+    "Refundable Deposit",
+    "Premium Paid",                                        # alias: "Premium paid"
+
+    # ── Performance Test ──────────────────────────────────────
+    "Performance Testing Terms",
+    "Cure Period",
+
+    # ── Termination ───────────────────────────────────────────
+    "Termination at Will",
+    "Termination by Owner / Lessor / Licensor",            # alias
+    "Termination by Operator / Lessee / Licensee",         # alias
+    "Consequences of Termination",
+    "Liquidated Damages",
+
+    # ── Miscellaneous ─────────────────────────────────────────
+    "Non-compete Clause",
+    "Sale Transfer Clause",
+    "Premature Termination Compensation",
+    "Governing Law and Jurisdiction",                      # alias: "Jurisdiction"
+    "Arbitration",
+    "Area of Protection",
 ]
 
-# Semantic fallback: discard results below this cosine similarity score
+
+# ─────────────────────────────────────────────────────────────
+# ALIAS MAP — Raw template variants for each canonical key
+#   Resolution order: canonical key first, then aliases in order
+#   Each alias is tried with exact match, then fuzzy match
+# ─────────────────────────────────────────────────────────────
+
+ALIAS_MAP = {
+    # ── General / Identity ────────────────────────────────────
+    "Owner / Lessor / Licensor Details and Address": [
+        "Owner Details and Address",
+        "Lessor Details and address",
+        "Licensor Details and address",
+    ],
+    "Operator / Lessee / Licensee Details and Address": [
+        "Operator Details and Address",
+        "Lessee Details and address",
+        "Licensee Details and address",
+    ],
+    "Nature of Right of Owner / Lessor / Licensor": [
+        "Nature of Right of Owner",
+        "Nature of Right of Lessor",
+        "Nature of Right of Licensor",
+    ],
+    "Nature of Right of Operator / Lessee / Licensee": [
+        "Nature of Right of Operator",
+        "Nature of Right of Lessee",
+        "Nature of Right of Licensee",
+    ],
+
+    # ── Term ──────────────────────────────────────────────────
+    "Lock-in Period": [
+        "Lock-in Period, if any",
+    ],
+
+    # ── Consideration (Lease / License) ───────────────────────
+    "Minimum Guarantee": [
+        "Minimum Guarantee Fee",
+    ],
+    "Due Date of Payment": [
+        "Due date of Payment",
+    ],
+    "Interest on Delayed Payment": [
+        "Interest on delayed Payment",
+        "Interest on delayed Payment Reconciliation Schedule",
+    ],
+    "Reconciliation Schedule": [
+        "Interest on delayed Payment Reconciliation Schedule",
+    ],
+    "Non-Refundable Deposit": [
+        "Non Refundable Deposit",
+    ],
+    "Premium Paid": [
+        "Premium paid",
+    ],
+
+    # ── Termination ───────────────────────────────────────────
+    "Termination by Owner / Lessor / Licensor": [
+        "Termination by Owner",
+        "Termination By Lessor",
+        "Termination By Licensor",
+    ],
+    "Termination by Operator / Lessee / Licensee": [
+        "Termination by Operator",
+        "Termination By Lessee",
+        "Termination By Licensee",
+    ],
+
+    # ── Miscellaneous ─────────────────────────────────────────
+    "Governing Law and Jurisdiction": [
+        "Jurisdiction",
+    ],
+}
+
+
+# ─────────────────────────────────────────────────────────────
+# COMPOSITE KEYS — Output columns built from multiple source keys
+#   "append"      → primary value + secondary appended
+#   "multi_field" → multiple source keys formatted as multi-line text
+# ─────────────────────────────────────────────────────────────
+
+COMPOSITE_KEYS = {
+    "Site Details": {
+        "type": "append",
+        "primary": "Site Details",
+        "secondary": "Additional Construction, if any",
+        "fallback_secondary": "NOT Found",
+    },
+    "Supplemental / Renewal Agreement Summary": {
+        "type": "multi_field",
+        "section_filter": [
+            "Supplemental / Renewal Agreement",
+            "First Supplemental Agreement",
+            "Second Supplemental Agreement",
+            "Third Supplemental Agreement",
+        ],
+        "source_keys": [
+            ("Execution Date",                                   "Execution Date"),
+            ("Valid from",                                       "Valid From"),
+            ("Valid up to",                                      "Valid Up To"),
+            ("Any other amendments in the Supplemental Agreement", "Amendments"),
+            ("Original Documents Location (place)",              "Original Documents Location"),
+        ],
+    },
+    "Operations Summary": {
+        "type": "multi_field",
+        "section_filter": [
+            "Operations",
+        ],
+        "source_keys": [
+            ("Key Personnel",              "Key Personnel"),
+            ("Key Personnel / Appointment", "Key Personnel / Appointment"),
+        ],
+    },
+}
+
+
+# Semantic fallback threshold (kept for potential future use)
 SEMANTIC_SCORE_THRESHOLD = 0.40
 
 # ─────────────────────────────────────────────────────────────
@@ -72,15 +251,6 @@ def scroll_all(scroll_filter=None, payload_fields=None) -> list:
     Paginated scroll through Qdrant collection.
     Handles any collection size — keeps scrolling until
     next_offset is None.
-
-    Args:
-        scroll_filter: Optional Qdrant Filter to scope results.
-        payload_fields: Optional list of payload field names to return.
-                        Reduces data transferred if you only need e.g. ["hotel_name"].
-                        None = return full payload.
-
-    Returns:
-        List of all matching Qdrant point records.
     """
     all_points = []
     offset = None
@@ -130,9 +300,6 @@ def fetch_hotel_chunks(hotel_name: str) -> list:
     """
     Fetch ALL chunks for a single hotel in ONE paginated scroll.
     Returns list of payload dicts (not Qdrant point objects).
-
-    This is the key optimization: one query per hotel,
-    then all matching happens in-memory.
     """
     hotel_filter = Filter(must=[
         FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
@@ -170,23 +337,30 @@ def find_exact_match(core_key: str, hotel_chunks: list) -> dict | None:
 
     return None
 
+def has_negation_conflict(a: str, b: str) -> bool:
+    """
+    Prevent fuzzy matches between semantically opposite keys like:
+      - Refundable Deposit vs Non-Refundable Deposit
+    """
+    a = normalize_key(a).replace("-", " ")
+    b = normalize_key(b).replace("-", " ")
+
+    a_words = set(a.split())
+    b_words = set(b.split())
+
+    # If one key has 'non' and the other doesn't, treat as conflict
+    return ("non" in a_words) != ("non" in b_words)
+
 
 def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
     """
-    Fuzzy substring match:
-        core_key is contained in chunk key_name
-        OR chunk key_name is contained in core_key
-
-    Handles naming variations like:
-        "Termination by Owner"  in  "Termination by Owner/Operator"
-        "Sales & Marketing Fee" in  "Sales & Marketing Fee & CGS Fee"
-
-    If multiple chunks match, picks the one with highest word overlap.
-
-    Cost: zero (in-memory).
+    Safer fuzzy substring match:
+      - allows close key variants
+      - blocks semantically opposite matches such as
+        'Non-Refundable Deposit' -> 'Refundable Deposit'
     """
     target = normalize_key(core_key)
-    target_words = set(target.split())
+    target_words = set(target.replace("-", " ").split())
 
     best_match = None
     best_overlap = 0
@@ -194,10 +368,12 @@ def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
     for chunk in hotel_chunks:
         chunk_key = normalize_key(chunk.get("key_name", ""))
 
-        # Substring check (either direction)
+        # Skip semantic conflicts like refundable vs non-refundable
+        if has_negation_conflict(target, chunk_key):
+            continue
+
         if target in chunk_key or chunk_key in target:
-            # Score by word overlap ratio (higher = more relevant)
-            chunk_words = set(chunk_key.split())
+            chunk_words = set(chunk_key.replace("-", " ").split())
             overlap = len(target_words & chunk_words)
             total = max(len(target_words), len(chunk_words), 1)
             score = overlap / total
@@ -209,9 +385,9 @@ def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
     return best_match
 
 
+
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 5 — SEMANTIC SEARCH (expensive, last resort)
-#   Uses query_points() — the new API (qdrant-client >= 1.12)
+# FUNCTION 5 — SEMANTIC SEARCH (kept for future use, not in main flow)
 # ─────────────────────────────────────────────────────────────
 
 def get_embedding(text: str) -> list:
@@ -228,10 +404,8 @@ def semantic_search(query: str, hotel_name: str, top_k: int = 3) -> list:
     Embed query and search Qdrant by cosine similarity,
     filtered to a single hotel's chunks.
 
-    This is the EXPENSIVE fallback — only called when
-    both exact and fuzzy match fail.
-
-    Returns list of payloads with scores, sorted by score desc.
+    Currently NOT used in the main retrieval flow.
+    Kept for potential future use.
     """
     query_vector = get_embedding(query)
 
@@ -254,9 +428,175 @@ def semantic_search(query: str, hotel_name: str, top_k: int = 3) -> list:
 
 
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 6 — RETRIEVE CORE ATTRIBUTES (HOTEL-CENTRIC)
+# FUNCTION 6 — KEY RESOLUTION LAYER
+#   resolve_single_key   → exact + fuzzy for one key name
+#   resolve_with_aliases → canonical + alias variants
+#   resolve_composite    → build from multiple source keys
+# ─────────────────────────────────────────────────────────────
+
+def resolve_single_key(key: str, chunks: list) -> tuple:
+    """
+    Find value for a single key name using exact -> fuzzy.
+
+    Args:
+        key:    The key name to search for.
+        chunks: List of chunk payloads to search within.
+
+    Returns:
+        (chunk_dict, value_string) if found.
+        (None, None) if not found.
+    """
+    match = find_exact_match(key, chunks)
+    if not match:
+        match = find_fuzzy_match(key, chunks)
+
+    if match:
+        val = sanitize_value(match.get("value", "").strip())
+        if val:
+            return match, val
+        return match, "N/A"
+
+    return None, None
+
+
+def resolve_with_aliases(core_key: str, hotel_chunks: list) -> tuple:
+    """
+    Try canonical key first, then each alias.
+    For each variant: exact match first, then fuzzy.
+
+    Resolution order:
+      1. Exact match on canonical key
+      2. Exact match on each alias (in order)
+      3. Fuzzy match on canonical key
+      4. Fuzzy match on each alias (in order)
+
+    Args:
+        core_key:     The canonical output key name.
+        hotel_chunks: All chunks for this hotel.
+
+    Returns:
+        (match_dict, method_string) where method is "exact", "alias", or "fuzzy".
+        (None, "miss") if nothing found.
+    """
+    aliases = ALIAS_MAP.get(core_key, [])
+
+    # Pass 1: Exact match on canonical key
+    match = find_exact_match(core_key, hotel_chunks)
+    if match:
+        return match, "exact"
+
+    # Pass 2: Exact match on each alias
+    for alias in aliases:
+        match = find_exact_match(alias, hotel_chunks)
+        if match:
+            return match, "alias"
+
+    # Pass 3: Fuzzy match on canonical key
+    match = find_fuzzy_match(core_key, hotel_chunks)
+    if match:
+        return match, "fuzzy"
+
+    # Pass 4: Fuzzy match on each alias
+    for alias in aliases:
+        match = find_fuzzy_match(alias, hotel_chunks)
+        if match:
+            return match, "fuzzy"
+
+    return None, "miss"
+
+
+def resolve_composite(core_key: str, hotel_chunks: list) -> dict | None:
+    """
+    Build a composite value from multiple source keys.
+
+    Supports two types:
+      "append"      — primary value + secondary appended in same cell
+      "multi_field" — multiple source keys formatted as multi-line text
+
+    For "multi_field" with a section_filter, only chunks from the
+    specified sections are searched (prevents e.g. Term "Valid From"
+    from being confused with Supplemental "Valid from").
+
+    Args:
+        core_key:     The composite canonical key name.
+        hotel_chunks: All chunks for this hotel.
+
+    Returns:
+        A chunk-like dict with the composite "value", or None if MISS.
+    """
+    config = COMPOSITE_KEYS[core_key]
+
+    # ── Type: append ──────────────────────────────────────────
+    if config["type"] == "append":
+        primary_key  = config["primary"]
+        secondary_key = config["secondary"]
+        fallback     = config["fallback_secondary"]
+
+        # Find primary (required)
+        primary_match, primary_val = resolve_single_key(primary_key, hotel_chunks)
+        if not primary_val:
+            return None  # MISS — primary not found
+
+        # Find secondary (optional)
+        _, secondary_val = resolve_single_key(secondary_key, hotel_chunks)
+        if not secondary_val:
+            secondary_val = fallback
+
+        # Build composite value
+        if secondary_val and secondary_val != fallback:
+            combined = f"{primary_val}\nAdditional Construction, if any: {secondary_val}"
+        else:
+            combined = primary_val
+
+        result = dict(primary_match)
+        result["value"] = combined
+        result["key_name"] = core_key
+        return result
+
+    # ── Type: multi_field ─────────────────────────────────────
+    elif config["type"] == "multi_field":
+        source_keys = config["source_keys"]
+
+        # Scope chunks to specific sections if configured
+        if "section_filter" in config:
+            allowed = [s.lower() for s in config["section_filter"]]
+            scoped_chunks = [
+                c for c in hotel_chunks
+                if c.get("section", "").lower() in allowed
+            ]
+        else:
+            scoped_chunks = hotel_chunks
+
+        lines = []
+        found_any = False
+        base_chunk = None
+
+        for source_key, label in source_keys:
+            match, val = resolve_single_key(source_key, scoped_chunks)
+
+            if val:
+                lines.append(f"{label}: {val}")
+                found_any = True
+                if base_chunk is None:
+                    base_chunk = match
+            else:
+                lines.append(f"{label}: NOT Found")
+
+        if not found_any:
+            return None  # MISS — none of the source keys found
+
+        result = dict(base_chunk) if base_chunk else {}
+        result["value"] = "\n".join(lines)
+        result["key_name"] = core_key
+        return result
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────
+# FUNCTION 7 — RETRIEVE CORE ATTRIBUTES (HOTEL-CENTRIC)
 #   Processes ONE hotel at a time
-#   3-tier: exact -> fuzzy -> semantic
+#   Resolution: composite -> alias -> exact -> fuzzy -> MISS
 # ─────────────────────────────────────────────────────────────
 
 def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
@@ -264,16 +604,17 @@ def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
     Retrieve the fixed set of core attributes for a SINGLE hotel.
 
     All matching runs against pre-fetched hotel_chunks (in-memory).
-    Semantic search (API call) is only used as last resort.
+    No API calls are made (semantic search is disabled).
 
-    Strategy for each key in CORE_KEYS:
-      Step 1: Exact match   (in-memory, free)   — key_name == core_key
-      Step 2: Fuzzy match   (in-memory, free)   — substring overlap
-      Step 3: Semantic search (API call, costly) — cosine similarity
+    Resolution order for each CORE_KEY:
+      1. If composite key  -> build from multiple source keys
+      2. If has aliases    -> try canonical + each alias (exact then fuzzy)
+      3. Default           -> exact match then fuzzy match
+      4. Else              -> MISS
 
     Each returned chunk is tagged with:
       - "core_key":          which CORE_KEY column this fills
-      - "retrieval_method":  "exact", "fuzzy", or "semantic"
+      - "retrieval_method":  "composite", "exact", "alias", "fuzzy"
 
     Args:
         hotel_name:   The exact hotel_name as stored in Qdrant payload.
@@ -286,58 +627,71 @@ def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
 
     for key in CORE_KEYS:
 
-        # ── Step 1: Exact match (free) ────────────────────────
-        match = find_exact_match(key, hotel_chunks)
-        if match:
-            match = match.copy()              # ← ADD THIS
-            match["retrieval_method"] = "exact"
-            match["core_key"] = key
-            chunks.append(match)
-            print(f"    [EXACT]    '{key}'")
+        # ── Step 0: Composite key ─────────────────────────────
+        if key in COMPOSITE_KEYS:
+            result = resolve_composite(key, hotel_chunks)
+            if result:
+                result = result.copy()
+                result["retrieval_method"] = "composite"
+                result["core_key"] = key
+                chunks.append(result)
+                print(f"    [COMPOSITE] '{key}'")
+            else:
+                print(f"    [MISS]      '{key}'")
             continue
 
-        # ── Step 2: Fuzzy match (free) ────────────────────────
-        match = find_fuzzy_match(key, hotel_chunks)
+        # ── Step 1+2: Alias-aware resolution ──────────────────
+        #   exact(canonical) -> exact(aliases) -> fuzzy(canonical) -> fuzzy(aliases)
+        match, method = resolve_with_aliases(key, hotel_chunks)
+
         if match:
-            match = match.copy()              # ← ADD THIS
-            match["retrieval_method"] = "fuzzy"
+            match = match.copy()
+            match["retrieval_method"] = method
             match["core_key"] = key
             chunks.append(match)
-            print(f"    [FUZZY]    '{key}' -> '{match.get('key_name', '?')}'")
+
+            if method == "alias":
+                print(f"    [ALIAS]     '{key}' -> '{match.get('key_name', '?')}'")
+            elif method == "fuzzy":
+                print(f"    [FUZZY]     '{key}' -> '{match.get('key_name', '?')}'")
+            else:
+                print(f"    [EXACT]     '{key}'")
             continue
 
-        # # ── Step 3: Semantic fallback (costs 1 embedding call) ─
-        # sem_results = semantic_search(
-        #     query=key, hotel_name=hotel_name, top_k=3
-        # )
-
-        # # Filter by score threshold
-        # sem_results = [
-        #     r for r in sem_results
-        #     if r.get("score", 0) > SEMANTIC_SCORE_THRESHOLD
-        # ]
-
-        # if sem_results:
-        #     best = sem_results[0]
-        #     best["retrieval_method"] = "semantic"
-        #     best["core_key"] = key
-        #     chunks.append(best)
-        #     print(
-        #         f"    [SEMANTIC] '{key}' -> '{best.get('key_name', '?')}' "
-        #         f"(score={best.get('score', 0):.4f})"
-        #     )
-        # else:
-        #     print(f"    [MISS]     '{key}'")
-
-        print(f"    [MISS]     '{key}'")
+        # ── Step 3: MISS ──────────────────────────────────────
+        print(f"    [MISS]      '{key}'")
 
     return chunks
 
 
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 7 — FIND VALUE FOR KEY (Excel column mapping)
+# FUNCTION 8 — FIND VALUE FOR KEY (Excel column mapping)
 #   Maps CORE_KEY column name -> chunk value
 # ─────────────────────────────────────────────────────────────
+
+def sanitize_value(text: str) -> str:
+    """
+    Remove AI-generated boilerplate note that sometimes leaks into
+    the last row's value (e.g. Area of Protection).
+
+    Case-insensitive, None-safe.
+    """
+    if text is None:
+        return "N/A"
+
+    text = str(text)
+
+    # Remove AI-generated note and everything after it
+    text = re.split(
+        r'\s*(?:•\s*)?note:\s*this document is ai[- ]generated',
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE
+    )[0]
+
+    text = text.strip()
+    return text if text else "N/A"
+
 
 def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
     """
@@ -349,14 +703,9 @@ def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
       2. Fuzzy match:   core_key is contained in chunk key_name
                         OR chunk key_name is contained in core_key
 
-    Args:
-        core_key:     The CORE_KEY column name to find.
-        hotel_chunks: All retrieved chunks for one hotel.
-
     Returns:
         The chunk's "value" field, or "N/A" if not found.
     """
-    
     core_lower = core_key.lower().strip()
 
     # Pass 0: Tagged match
@@ -378,13 +727,11 @@ def find_value_for_key(core_key: str, hotel_chunks: list) -> str:
             raw = chunk.get("value", "").strip()
             return raw if raw else "N/A"
 
-    # Key not found at all
     return "NOT FOUND"
 
 
-
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 8 — EXPORT TO EXCEL (PIVOTED — one row per hotel)
+# FUNCTION 9 — EXPORT TO EXCEL (PIVOTED — one row per hotel)
 # ─────────────────────────────────────────────────────────────
 
 # ── Style constants ────────────────────────────────────────────
@@ -528,6 +875,7 @@ def export_to_excel(chunks: list) -> Path:
     """
     Export chunk data to a PIVOTED Excel file.
     Layout: ONE ROW per hotel, each CORE_KEY is its own COLUMN.
+    Last two columns: Maker Details, Checker Details.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -581,6 +929,8 @@ def export_to_excel(chunks: list) -> Path:
         ws.cell(row=row_idx, column=1, value=serial)
         # Column 2: File Name
         file_name = hotel_chunks[0].get("file_name", "N/A") or "N/A"
+        if file_name.endswith(".md"):
+            file_name = file_name[:-3] + ".pdf"
         ws.cell(row=row_idx, column=2, value=str(file_name))
         # Column 3: Agreement Type
         ws.cell(row=row_idx, column=3, value=str(agreement_type))
@@ -589,9 +939,9 @@ def export_to_excel(chunks: list) -> Path:
         for key_idx, core_key in enumerate(CORE_KEYS):
             col = 4 + key_idx
             value = find_value_for_key(core_key, hotel_chunks)
-            ws.cell(row=row_idx, column=col, value=str(value))
+            ws.cell(row=row_idx, column=col, value=sanitize_value(str(value)))
 
-        # Last two columns: Maker and Checker Details (from audit_trail)
+        # Last two columns: Maker and Checker Details
         audit = hotel_chunks[0].get("audit_trail", {}) or {}
         maker_col   = 4 + len(CORE_KEYS)
         checker_col = 4 + len(CORE_KEYS) + 1
@@ -648,23 +998,23 @@ def export_to_excel(chunks: list) -> Path:
 
 
 # ─────────────────────────────────────────────────────────────
-# FUNCTION 9 — RUN (Orchestrator — hotel-centric)
+# FUNCTION 10 — RUN (Orchestrator — hotel-centric)
 # ─────────────────────────────────────────────────────────────
 
 def run(hotel_name: str = None):
     """
     Main entry point.
 
-    Design: HOTEL-CENTRIC
-      1. Discover all hotels in Qdrant (paginated, safe for any size)
+    Design: HOTEL-CENTRIC, DETERMINISTIC
+      1. Discover all hotels in Qdrant (paginated)
       2. For EACH hotel:
          a. Fetch all chunks ONCE (one Qdrant scroll)
-         b. For each CORE_KEY: exact -> fuzzy -> semantic
-      3. Export pivoted Excel
-
-    Args:
-        hotel_name: If provided, extract for that hotel only.
-                    If None, extract across ALL hotels in Qdrant.
+         b. For each CORE_KEY:
+            - composite key  -> build from source keys
+            - aliased key    -> canonical + variants (exact then fuzzy)
+            - default key    -> exact then fuzzy
+            - else           -> MISS
+      3. Export pivoted Excel with Maker/Checker as last columns
     """
     print()
     print("=" * 60)
@@ -679,17 +1029,20 @@ def run(hotel_name: str = None):
 
     print(f"\n  Hotels:     {len(hotels)}")
     print(f"  Core Keys:  {len(CORE_KEYS)}")
+    print(f"  Aliases:    {len(ALIAS_MAP)} keys with aliases")
+    print(f"  Composites: {len(COMPOSITE_KEYS)} composite keys")
     print(f"  Collection: {COLLECTION_NAME}")
-    print(f"  Strategy:   Per-hotel -> exact -> fuzzy -> semantic (threshold={SEMANTIC_SCORE_THRESHOLD})")
+    print(f"  Strategy:   composite -> alias -> exact -> fuzzy -> MISS")
     print()
 
     # ── Step 1: Retrieve per hotel ────────────────────────────
     print("[Step 1] Retrieving core attributes (hotel-centric)...\n")
 
     all_chunks = []
-    total_exact = 0
-    total_fuzzy = 0
-    total_semantic = 0
+    total_exact     = 0
+    total_alias     = 0
+    total_fuzzy     = 0
+    total_composite = 0
 
     for idx, hotel in enumerate(hotels, 1):
         print(f"  [{idx}/{len(hotels)}] 🏨 {hotel}")
@@ -698,7 +1051,7 @@ def run(hotel_name: str = None):
         hotel_chunks = fetch_hotel_chunks(hotel)
         print(f"         ({len(hotel_chunks)} chunks in collection)")
 
-        # Retrieve core attributes using 3-tier matching
+        # Retrieve core attributes
         chunks = retrieve_core_attributes(
             hotel_name=hotel,
             hotel_chunks=hotel_chunks
@@ -707,15 +1060,17 @@ def run(hotel_name: str = None):
 
         # Per-hotel mini stats
         exact = sum(1 for c in chunks if c.get("retrieval_method") == "exact")
+        alias = sum(1 for c in chunks if c.get("retrieval_method") == "alias")
         fuzzy = sum(1 for c in chunks if c.get("retrieval_method") == "fuzzy")
-        sem   = sum(1 for c in chunks if c.get("retrieval_method") == "semantic")
-        total_exact += exact
-        total_fuzzy += fuzzy
-        total_semantic += sem
+        comp  = sum(1 for c in chunks if c.get("retrieval_method") == "composite")
+        total_exact     += exact
+        total_alias     += alias
+        total_fuzzy     += fuzzy
+        total_composite += comp
 
         print(
             f"         -> {len(chunks)}/{len(CORE_KEYS)} keys found "
-            f"(exact={exact}, fuzzy={fuzzy}, semantic={sem})\n"
+            f"(exact={exact}, alias={alias}, fuzzy={fuzzy}, composite={comp})\n"
         )
 
     # ── Stats ─────────────────────────────────────────────────
@@ -725,9 +1080,10 @@ def run(hotel_name: str = None):
     print(f"  Total chunks retrieved: {len(all_chunks)}")
     print(f"  Hotels processed:       {len(hotels_found)}")
     print(f"  Via exact match:        {total_exact}")
+    print(f"  Via alias match:        {total_alias}")
     print(f"  Via fuzzy match:        {total_fuzzy}")
-    print(f"  Via semantic fallback:  {total_semantic}")
-    print(f"  Embedding API calls:    {total_semantic}  (fuzzy saved {total_fuzzy} calls)")
+    print(f"  Via composite build:    {total_composite}")
+    print(f"  API calls:              0  (fully deterministic)")
 
     if not all_chunks:
         print("\n  WARNING: No data found. Check Qdrant collection or key names.")

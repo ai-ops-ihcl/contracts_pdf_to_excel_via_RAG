@@ -303,6 +303,14 @@ def get_all_hotels() -> list:
     ))
     return hotels
 
+def get_all_files() -> list:
+    """Get sorted list of all unique file names in the collection."""
+    all_points = scroll_all(payload_fields=["file_name"])
+    return sorted(set(
+        p.payload.get("file_name", "")
+        for p in all_points
+        if p.payload.get("file_name")
+    ))
 
 # ─────────────────────────────────────────────────────────────
 # FUNCTION 3 — FETCH ALL CHUNKS FOR ONE HOTEL
@@ -320,6 +328,13 @@ def fetch_hotel_chunks(hotel_name: str) -> list:
     points = scroll_all(scroll_filter=hotel_filter)
     return [point.payload for point in points]
 
+def fetch_file_chunks(file_name: str) -> list:
+    """Fetch ALL chunks for a single file in ONE paginated scroll."""
+    file_filter = Filter(must=[
+        FieldCondition(key="file_name", match=MatchValue(value=file_name))
+    ])
+    points = scroll_all(scroll_filter=file_filter)
+    return [point.payload for point in points]
 
 # ─────────────────────────────────────────────────────────────
 # FUNCTION 4 — LOCAL MATCHING (exact + fuzzy, no API calls)
@@ -979,28 +994,30 @@ def export_to_excel(chunks: list) -> Path:
         cell.border = THIN_BORDER
     ws.row_dimensions[header_row].height = 20
 
-    # ── Group chunks by hotel_name ────────────────────────────
-    hotel_groups = {}
+    # ── Group chunks by file_name ─────────────────────────────
+    file_groups = {}
     for chunk in chunks:
-        hotel = chunk.get("hotel_name", "Unknown")
-        if hotel not in hotel_groups:
-            hotel_groups[hotel] = []
-        hotel_groups[hotel].append(chunk)
+        fname = chunk.get("file_name", "Unknown")
+        if fname not in file_groups:
+            file_groups[fname] = []
+        file_groups[fname].append(chunk)
 
-    # ── Write one row per hotel ───────────────────────────────
+    # ── Write one row per file ────────────────────────────────
+
+    # ── Write one row per file ───────────────────────────────
     row_idx = header_row + 1
     serial = 1
 
-    for hotel_name in sorted(hotel_groups.keys()):
-        hotel_chunks = hotel_groups[hotel_name]
+    for file_name in sorted(file_groups.keys()):
+        file_chunks = file_groups[file_name]
 
-        agreement_type = hotel_chunks[0].get("agreement_type", "N/A") or "N/A"
+        agreement_type = file_chunks[0].get("agreement_type", "N/A") or "N/A"
         row_fill = ALT_ROW_FILL if serial % 2 == 0 else WHITE_FILL
 
         # Column 1: Serial #
         ws.cell(row=row_idx, column=1, value=serial)
         # Column 2: File Name
-        file_name = hotel_chunks[0].get("file_name", "N/A") or "N/A"
+        file_name = file_chunks[0].get("file_name", "N/A") or "N/A"
         if file_name.endswith(".md"):
             file_name = file_name[:-3] + ".pdf"
         ws.cell(row=row_idx, column=2, value=str(file_name))
@@ -1010,11 +1027,11 @@ def export_to_excel(chunks: list) -> Path:
         # Columns 4+: One column per CORE_KEY
         for key_idx, core_key in enumerate(CORE_KEYS):
             col = 4 + key_idx
-            value = find_value_for_key(core_key, hotel_chunks)
+            value = find_value_for_key(core_key, file_chunks)
             ws.cell(row=row_idx, column=col, value=sanitize_value(str(value)))
 
         # Last two columns: Maker and Checker Details
-        audit = hotel_chunks[0].get("audit_trail", {}) or {}
+        audit = file_chunks[0].get("audit_trail", {}) or {}
         maker_col   = 4 + len(CORE_KEYS)
         checker_col = 4 + len(CORE_KEYS) + 1
         ws.cell(row=row_idx, column=maker_col,   value=format_maker_details(audit))
@@ -1073,42 +1090,33 @@ def export_to_excel(chunks: list) -> Path:
 # FUNCTION 10 — RUN (Orchestrator — hotel-centric)
 # ─────────────────────────────────────────────────────────────
 
-def run(hotel_name: str = None):
+def run(file_name: str = None):
     """
     Main entry point.
 
-    Design: HOTEL-CENTRIC, DETERMINISTIC
-      1. Discover all hotels in Qdrant (paginated)
-      2. For EACH hotel:
+    Design: FILE-CENTRIC, DETERMINISTIC
+      1. Discover all files in Qdrant (paginated)
+      2. For EACH file:
          a. Fetch all chunks ONCE (one Qdrant scroll)
-         b. For each CORE_KEY:
-            - composite key  -> build from source keys
-            - aliased key    -> canonical + variants (exact then fuzzy)
-            - default key    -> exact then fuzzy
-            - else           -> MISS
-      3. Export pivoted Excel with Maker/Checker as last columns
+         b. Resolve each CORE_KEY
+      3. Export pivoted Excel — one row per file
     """
     print()
     print("=" * 60)
     print("  IHCL Hotel Contracts — Core Attribute Extraction")
     print("=" * 60)
 
-    # ── Discover hotels ───────────────────────────────────────
-    if hotel_name:
-        hotels = [hotel_name]
-    else:
-        hotels = get_all_hotels()
+    files = [file_name] if file_name else get_all_files()
 
-    print(f"\n  Hotels:     {len(hotels)}")
+    print(f"\n  Files:      {len(files)}")
     print(f"  Core Keys:  {len(CORE_KEYS)}")
     print(f"  Aliases:    {len(ALIAS_MAP)} keys with aliases")
     print(f"  Composites: {len(COMPOSITE_KEYS)} composite keys")
     print(f"  Collection: {COLLECTION_NAME}")
-    print(f"  Strategy:   composite -> alias -> exact -> fuzzy -> MISS")
+    print(f"  Strategy:   composite -> alias -> exact -> containment -> fuzzy -> MISS")
     print()
 
-    # ── Step 1: Retrieve per hotel ────────────────────────────
-    print("[Step 1] Retrieving core attributes (hotel-centric)...\n")
+    print("[Step 1] Retrieving core attributes (file-centric)...\n")
 
     all_chunks = []
     total_exact     = 0
@@ -1117,21 +1125,25 @@ def run(hotel_name: str = None):
     total_composite = 0
     total_contain   = 0
 
-    for idx, hotel in enumerate(hotels, 1):
-        print(f"  [{idx}/{len(hotels)}] 🏨 {hotel}")
+    for idx, fname in enumerate(files, 1):
+        print(f"  [{idx}/{len(files)}] 📄 {fname}")
 
-        # Fetch all chunks for this hotel ONCE
-        hotel_chunks = fetch_hotel_chunks(hotel)
-        print(f"         ({len(hotel_chunks)} chunks in collection)")
+        file_chunks = fetch_file_chunks(fname)
+        print(f"         ({len(file_chunks)} chunks in collection)")
 
-        # Retrieve core attributes
+        if not file_chunks:
+            print(f"         ⚠ No chunks — skipping\n")
+            continue
+
+        h_name = file_chunks[0].get("hotel_name", "Unknown")
+        print(f"         🏨 {h_name}")
+
         chunks = retrieve_core_attributes(
-            hotel_name=hotel,
-            hotel_chunks=hotel_chunks
+            hotel_name=h_name,
+            hotel_chunks=file_chunks
         )
         all_chunks.extend(chunks)
 
-        # Per-hotel mini stats
         exact   = sum(1 for c in chunks if c.get("retrieval_method") == "exact")
         alias   = sum(1 for c in chunks if c.get("retrieval_method") == "alias")
         fuzzy   = sum(1 for c in chunks if c.get("retrieval_method") == "fuzzy")
@@ -1148,12 +1160,11 @@ def run(hotel_name: str = None):
             f"(exact={exact}, alias={alias}, fuzzy={fuzzy}, composite={comp}, contain={contain})\n"
         )
 
-    # ── Stats ─────────────────────────────────────────────────
-    hotels_found = sorted(set(c.get("hotel_name", "Unknown") for c in all_chunks))
+    files_found = sorted(set(c.get("file_name", "Unknown") for c in all_chunks))
 
     print(f"  {'─' * 50}")
     print(f"  Total chunks retrieved: {len(all_chunks)}")
-    print(f"  Hotels processed:       {len(hotels_found)}")
+    print(f"  Files processed:        {len(files_found)}")
     print(f"  Via exact match:        {total_exact}")
     print(f"  Via alias match:        {total_alias}")
     print(f"  Via fuzzy match:        {total_fuzzy}")
@@ -1165,13 +1176,12 @@ def run(hotel_name: str = None):
         print("\n  WARNING: No data found. Check Qdrant collection or key names.")
         return None
 
-    # ── Step 2: Export (pivoted) ──────────────────────────────
-    print(f"\n[Step 2] Exporting to Excel (pivoted: one row per hotel)...")
+    print(f"\n[Step 2] Exporting to Excel (pivoted: one row per file)...")
     excel_path = export_to_excel(all_chunks)
     print(f"  Saved: {excel_path}")
 
     print(f"\n{'=' * 60}")
-    print(f"  DONE — {len(hotels_found)} hotel(s), {len(CORE_KEYS)} columns each")
+    print(f"  DONE — {len(files_found)} file(s), {len(CORE_KEYS)} columns each")
     print(f"{'=' * 60}")
 
     return excel_path

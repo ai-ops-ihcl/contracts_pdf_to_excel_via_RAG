@@ -452,6 +452,7 @@ def create_payload_indexes():
         "agreement_type":  "keyword",
         "section":         "keyword",
         "page_no":         "integer",
+        "file_name":       "keyword",   # ← add this
     }
     for field, schema in indexes.items():
         try:

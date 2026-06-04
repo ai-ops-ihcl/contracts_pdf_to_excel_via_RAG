@@ -224,11 +224,23 @@ COMPOSITE_KEYS = {
             ("Key Personnel / Appointment", "Key Personnel / Appointment"),
         ],
     },
+    "Sales & Marketing Fee & Central Group Services Fee": {
+        "type": "multi_field",
+        "skip_missing": True,
+        "section_filter": ["Compensation"],
+        "source_keys": [
+            ("Sales & Marketing Fee",          "Sales & Marketing Fee"),
+            ("Sales and Marketing Fee",        "Sales & Marketing Fee"),
+            ("Central Group Services Fee",     "Central Group Services Fee"),
+            ("Central Group Services Charge",  "Central Group Services Fee"),
+        ],
+    },
 }
 
 
 # Semantic fallback threshold (kept for potential future use)
 SEMANTIC_SCORE_THRESHOLD = 0.40
+MIN_FUZZY_RECALL = 0.40   # at least 40% of canonical key's words must appear in raw key
 
 # ─────────────────────────────────────────────────────────────
 # CLIENTS
@@ -375,6 +387,11 @@ def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
         if target in chunk_key or chunk_key in target:
             chunk_words = set(chunk_key.replace("-", " ").split())
             overlap = len(target_words & chunk_words)
+            # ── NEW: 40% recall guard ─────────────────────
+            recall = overlap / max(len(target_words), 1)
+            if recall < MIN_FUZZY_RECALL:
+                continue
+            # ──────────────────────────────────────────────
             total = max(len(target_words), len(chunk_words), 1)
             score = overlap / total
 
@@ -385,6 +402,45 @@ def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
     return best_match
 
 
+def find_containment_merge(core_key: str, hotel_chunks: list) -> dict | None:
+    """
+    100% Containment Merge — finds all raw keys where EVERY word of
+    the canonical key appears in the raw key.
+    
+    If 1 match  → return it directly.
+    If 2+ matches → merge all values into one combined chunk.
+    
+    Self-guarding: a raw key with fewer words than canonical can
+    never pass containment (subset check fails automatically).
+    """
+    target = normalize_key(core_key)
+    target_words = set(target.replace("-", " ").split())
+
+    matched = []
+    for chunk in hotel_chunks:
+        chunk_key = normalize_key(chunk.get("key_name", ""))
+        if chunk_key == target:
+            continue  # exact matches handled earlier
+
+        chunk_words = set(chunk_key.replace("-", " ").split())
+        if target_words.issubset(chunk_words):
+            matched.append(chunk)
+
+    if not matched:
+        return None
+
+    if len(matched) == 1:
+        return matched[0]
+
+    # Merge all child values
+    lines = [
+        f"{m.get('key_name', '').strip()}: {sanitize_value(m.get('value', '').strip())}"
+        for m in matched
+    ]
+    result = dict(matched[0])
+    result["value"] = "\n".join(lines)
+    result["key_name"] = core_key
+    return result
 
 # ─────────────────────────────────────────────────────────────
 # FUNCTION 5 — SEMANTIC SEARCH (kept for future use, not in main flow)
@@ -490,13 +546,18 @@ def resolve_with_aliases(core_key: str, hotel_chunks: list) -> tuple:
         match = find_exact_match(alias, hotel_chunks)
         if match:
             return match, "alias"
+        
+    # Pass 3: 100% Containment Merge  ← NEW
+    match = find_containment_merge(core_key, hotel_chunks)
+    if match:
+        return match, "containment_merge"
 
-    # Pass 3: Fuzzy match on canonical key
+    # Pass 4: Fuzzy match on canonical key
     match = find_fuzzy_match(core_key, hotel_chunks)
     if match:
         return match, "fuzzy"
 
-    # Pass 4: Fuzzy match on each alias
+    # Pass 5: Fuzzy match on each alias
     for alias in aliases:
         match = find_fuzzy_match(alias, hotel_chunks)
         if match:
@@ -571,16 +632,25 @@ def resolve_composite(core_key: str, hotel_chunks: list) -> dict | None:
         found_any = False
         base_chunk = None
 
+        skip_missing = config.get("skip_missing", False)
+        seen_labels = set()
+
         for source_key, label in source_keys:
+            # Deduplicate by label — first found wins
+            if label in seen_labels:
+                continue
+
             match, val = resolve_single_key(source_key, scoped_chunks)
 
             if val:
                 lines.append(f"{label}: {val}")
                 found_any = True
+                seen_labels.add(label)
                 if base_chunk is None:
                     base_chunk = match
-            else:
+            elif not skip_missing:
                 lines.append(f"{label}: NOT Found")
+                seen_labels.add(label)
 
         if not found_any:
             return None  # MISS — none of the source keys found
@@ -654,6 +724,8 @@ def retrieve_core_attributes(hotel_name: str, hotel_chunks: list) -> list:
                 print(f"    [ALIAS]     '{key}' -> '{match.get('key_name', '?')}'")
             elif method == "fuzzy":
                 print(f"    [FUZZY]     '{key}' -> '{match.get('key_name', '?')}'")
+            elif method == "containment_merge":
+                print(f"    [CONTAIN]   '{key}' -> '{match.get('key_name', '?')}'")
             else:
                 print(f"    [EXACT]     '{key}'")
             continue
@@ -1043,6 +1115,7 @@ def run(hotel_name: str = None):
     total_alias     = 0
     total_fuzzy     = 0
     total_composite = 0
+    total_contain   = 0
 
     for idx, hotel in enumerate(hotels, 1):
         print(f"  [{idx}/{len(hotels)}] 🏨 {hotel}")
@@ -1059,18 +1132,20 @@ def run(hotel_name: str = None):
         all_chunks.extend(chunks)
 
         # Per-hotel mini stats
-        exact = sum(1 for c in chunks if c.get("retrieval_method") == "exact")
-        alias = sum(1 for c in chunks if c.get("retrieval_method") == "alias")
-        fuzzy = sum(1 for c in chunks if c.get("retrieval_method") == "fuzzy")
-        comp  = sum(1 for c in chunks if c.get("retrieval_method") == "composite")
+        exact   = sum(1 for c in chunks if c.get("retrieval_method") == "exact")
+        alias   = sum(1 for c in chunks if c.get("retrieval_method") == "alias")
+        fuzzy   = sum(1 for c in chunks if c.get("retrieval_method") == "fuzzy")
+        comp    = sum(1 for c in chunks if c.get("retrieval_method") == "composite")
+        contain = sum(1 for c in chunks if c.get("retrieval_method") == "containment_merge")
         total_exact     += exact
         total_alias     += alias
         total_fuzzy     += fuzzy
         total_composite += comp
+        total_contain   += contain
 
         print(
             f"         -> {len(chunks)}/{len(CORE_KEYS)} keys found "
-            f"(exact={exact}, alias={alias}, fuzzy={fuzzy}, composite={comp})\n"
+            f"(exact={exact}, alias={alias}, fuzzy={fuzzy}, composite={comp}, contain={contain})\n"
         )
 
     # ── Stats ─────────────────────────────────────────────────
@@ -1083,6 +1158,7 @@ def run(hotel_name: str = None):
     print(f"  Via alias match:        {total_alias}")
     print(f"  Via fuzzy match:        {total_fuzzy}")
     print(f"  Via composite build:    {total_composite}")
+    print(f"  Via containment merge:  {total_contain}")
     print(f"  API calls:              0  (fully deterministic)")
 
     if not all_chunks:

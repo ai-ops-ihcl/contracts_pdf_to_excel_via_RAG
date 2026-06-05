@@ -1,9 +1,5 @@
 """
-inspect_chunks.py
-─────────────────
-Shows every chunk stored in Qdrant for a specific hotel file.
-Prints full payload: section, key, value, page, chunk_text, audit_trail.
-
+Testing File --Shows every chunk stored in Qdrant for a specific hotel file.
 Usage:
     python inspect_chunks.py
     → edit FILE_NAME below to the .md filename you want to inspect

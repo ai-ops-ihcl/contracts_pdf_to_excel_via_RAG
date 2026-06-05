@@ -4,7 +4,7 @@ contract_summary_217/
 demo_217/
 demo_markdowns/
 pymupdf_markdowns/
-
+.claude/
 .env
 __pycache__/
 query_results/
@@ -16,4 +16,3 @@ qdrant_local/
 *.sqlite
 data/
 logs/
-q

@@ -144,7 +144,7 @@ def pdf_to_chunked_markdown(pdf_path: str) -> str:
     """
     Convert PDF → chunked markdown with page-aware delimiters.
     
-    Delimiters now carry page info:
+    Delimiters will also carry page info:
         ---SECTION:PAGE=1---
         ---KEY:PAGE=4---
     """
@@ -183,7 +183,7 @@ def pdf_to_chunked_markdown(pdf_path: str) -> str:
 # ─────────────────────────────────────────────────────────────
 
 INPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_217")
-OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\Generated_markdowns")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 for pdf_path in INPUT_DIR.glob("*.pdf"):

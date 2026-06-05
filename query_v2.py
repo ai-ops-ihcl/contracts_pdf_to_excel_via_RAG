@@ -27,8 +27,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────
 # CORE KEYS — Canonical output columns in the Excel
-#   Business-facing names. Raw template variants are in ALIAS_MAP.
-#   Composite fields are built from multiple source keys.
 # ─────────────────────────────────────────────────────────────
 
 CORE_KEYS = [
@@ -60,7 +58,7 @@ CORE_KEYS = [
     "Supplemental / Renewal Agreement Summary",            # composite: multi-field summary
 
     # ── Operations ────────────────────────────────────────────
-    "Operations Summary",                                  # composite: Key Personnel + Appointment
+    "Operations Summary",                                  # composite: "Key Personnel" + "Appointment"
 
     # ── Annual Plan and Budget ────────────────────────────────
     "Approval of Owner",
@@ -239,8 +237,9 @@ COMPOSITE_KEYS = {
 
 
 # Semantic fallback threshold (kept for potential future use)
-SEMANTIC_SCORE_THRESHOLD = 0.40
-MIN_FUZZY_RECALL = 0.40   # at least 40% of canonical key's words must appear in raw key
+
+# SEMANTIC_SCORE_THRESHOLD = 0.40 # semantic is currently disabled.
+MIN_FUZZY_RECALL = 0.40   # At least 40% of canonical key's words must appear in raw key
 
 # ─────────────────────────────────────────────────────────────
 # CLIENTS
@@ -402,7 +401,7 @@ def find_fuzzy_match(core_key: str, hotel_chunks: list) -> dict | None:
         if target in chunk_key or chunk_key in target:
             chunk_words = set(chunk_key.replace("-", " ").split())
             overlap = len(target_words & chunk_words)
-            # ── NEW: 40% recall guard ─────────────────────
+            # ── 40% recall guard ─────────────────────
             recall = overlap / max(len(target_words), 1)
             if recall < MIN_FUZZY_RECALL:
                 continue
@@ -461,41 +460,41 @@ def find_containment_merge(core_key: str, hotel_chunks: list) -> dict | None:
 # FUNCTION 5 — SEMANTIC SEARCH (kept for future use, not in main flow)
 # ─────────────────────────────────────────────────────────────
 
-def get_embedding(text: str) -> list:
-    """Get embedding vector for a text string."""
-    response = openai_client.embeddings.create(
-        input=[text],
-        model=EMBEDDING_MODEL
-    )
-    return response.data[0].embedding
+# def get_embedding(text: str) -> list:
+#     """Get embedding vector for a text string."""
+#     response = openai_client.embeddings.create(
+#         input=[text],
+#         model=EMBEDDING_MODEL
+#     )
+#     return response.data[0].embedding
 
 
-def semantic_search(query: str, hotel_name: str, top_k: int = 3) -> list:
-    """
-    Embed query and search Qdrant by cosine similarity,
-    filtered to a single hotel's chunks.
+# def semantic_search(query: str, hotel_name: str, top_k: int = 3) -> list:
+#     """
+#     Embed query and search Qdrant by cosine similarity,
+#     filtered to a single hotel's chunks.
 
-    Currently NOT used in the main retrieval flow.
-    Kept for potential future use.
-    """
-    query_vector = get_embedding(query)
+#     Currently NOT used in the main retrieval flow.
+#     Kept for potential future use.
+#     """
+#     query_vector = get_embedding(query)
 
-    query_filter = Filter(must=[
-        FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
-    ])
+#     query_filter = Filter(must=[
+#         FieldCondition(key="hotel_name", match=MatchValue(value=hotel_name))
+#     ])
 
-    results = qdrant_client.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        query_filter=query_filter,
-        limit=top_k,
-        with_payload=True
-    )
+#     results = qdrant_client.query_points(
+#         collection_name=COLLECTION_NAME,
+#         query=query_vector,
+#         query_filter=query_filter,
+#         limit=top_k,
+#         with_payload=True
+#     )
 
-    return [
-        {**point.payload, "score": point.score}
-        for point in results.points
-    ]
+#     return [
+#         {**point.payload, "score": point.score}
+#         for point in results.points
+#     ]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -562,7 +561,7 @@ def resolve_with_aliases(core_key: str, hotel_chunks: list) -> tuple:
         if match:
             return match, "alias"
         
-    # Pass 3: 100% Containment Merge  ← NEW
+    # Pass 3: 100% Containment Merge  — canonical key is fully contained in one or more raw keys
     match = find_containment_merge(core_key, hotel_chunks)
     if match:
         return match, "containment_merge"
@@ -592,10 +591,6 @@ def resolve_composite(core_key: str, hotel_chunks: list) -> dict | None:
     For "multi_field" with a section_filter, only chunks from the
     specified sections are searched (prevents e.g. Term "Valid From"
     from being confused with Supplemental "Valid from").
-
-    Args:
-        core_key:     The composite canonical key name.
-        hotel_chunks: All chunks for this hotel.
 
     Returns:
         A chunk-like dict with the composite "value", or None if MISS.
@@ -1002,8 +997,6 @@ def export_to_excel(chunks: list) -> Path:
             file_groups[fname] = []
         file_groups[fname].append(chunk)
 
-    # ── Write one row per file ────────────────────────────────
-
     # ── Write one row per file ───────────────────────────────
     row_idx = header_row + 1
     serial = 1
@@ -1056,7 +1049,7 @@ def export_to_excel(chunks: list) -> Path:
 
     # ── Column widths ─────────────────────────────────────────
     col_widths = {
-        1: 5,     # #
+        1: 5,     # Serial
         2: 45,    # File Name
         3: 25,    # Agreement Type
     }
@@ -1193,9 +1186,8 @@ def run(file_name: str = None):
 
 if __name__ == "__main__":
     try:
-        # Extract core attributes for ALL hotels
-        run()
 
+        run()
         # Or extract for a specific hotel:
         # run(hotel_name="Taj Exotica Resort and Spa, The Palm, Dubai")
 

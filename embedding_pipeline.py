@@ -1,5 +1,4 @@
 import os
-
 import shutil
 import re
 import time
@@ -22,7 +21,7 @@ EMBEDDING_MODEL    = "text-embedding-3-large"
 VECTOR_DIM         = 3072
 COLLECTION_NAME    = "hotel_contracts"
 QDRANT_PATH        = "./qdrant_local"
-MD_DIR             = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+MD_DIR             = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\Generated_markdowns")
 BATCH_SIZE         = 50
 
 # ── Clients ─────────────────────────────────────────────────
@@ -43,9 +42,7 @@ def parse_file_name(file_name: str) -> dict:
     Extract agreement_type, contract_id, hotel_hint from file name.
     
     Handles:
-      "(HMA) 000334 - Taj Exotica Resort and Spa The Palm Dubai (25-Jan-2026_12-04_PM_IST).md"
-      "(HMA) Gateway Ahmedabad (07-Mar-2026_08-18_AM_IST).md"
-      "(LA) 000412 - Taj Lands End Mumbai (10-Feb-2026_03-15_PM_IST).md"
+      "(HMA) 000334 - Taj Exotica Resort and Spa The Palm Dubai (25-Jan-2026_12-04_PM_IST).md",
       "(LLA) Vivanta Goa (15-Apr-2026_09-30_AM_IST).md"
     """
     result = {
@@ -123,7 +120,7 @@ def parse_key_row(row: str) -> tuple:
             if len(cell) < 100:
                 key_name = re.sub(r'<br>', ' ', cell).strip()
         elif not value:
-            value = cell           # ← numeric values like "20" now pass through
+            value = cell           # numeric values like "20" now pass through
             break
 
     return key_name, value
@@ -452,7 +449,7 @@ def create_payload_indexes():
         "agreement_type":  "keyword",
         "section":         "keyword",
         "page_no":         "integer",
-        "file_name":       "keyword",   # ← add this
+        "file_name":       "keyword",  
     }
     for field, schema in indexes.items():
         try:
@@ -551,7 +548,7 @@ def run_pipeline():
             batch = chunk_texts[i : i + BATCH_SIZE]
             embeddings = get_embeddings(batch)
             all_embeddings.extend(embeddings)
-            time.sleep(0.3)  # respect rate limits
+            time.sleep(0.3)  
 
         # ── Step 5: Build Qdrant points ──────────────────────
         points = []

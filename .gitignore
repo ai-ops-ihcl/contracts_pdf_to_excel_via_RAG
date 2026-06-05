@@ -14,3 +14,6 @@ reports/*.xlsx
 # Qdrant local database
 qdrant_local/
 *.sqlite
+data/
+logs/
+q

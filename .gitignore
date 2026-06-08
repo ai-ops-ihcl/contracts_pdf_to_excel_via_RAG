@@ -1,19 +1,32 @@
+# Virtual Environment
 .venv/
+
+# IDE / Editor
 .vscode/
-contract_summary_223/
-demo_217/
+
+# Environment Variables
+.env
+
+# Python
+__pycache__/
+
+# Generated Files
+Generated_markdowns/
 demo_markdowns/
 pymupdf_markdowns/
-
-.env
-__pycache__/
 query_results/
-qdrant_local/collection/hotel_contracts/storage.sqlite
 reports/*.xlsx
 
-# Qdrant local database
+# Temporary Project Folders
+contract_summary_223/
+demo_217/
+
+# Qdrant Database
 qdrant_local/
+
+# Database Files
 *.sqlite
+
+# Data & Logs
 data/
 logs/
-Generated_markdowns/

@@ -1,6 +1,6 @@
 .venv/
 .vscode/
-contract_summary_217/
+contract_summary_223/
 demo_217/
 demo_markdowns/
 pymupdf_markdowns/
@@ -16,4 +16,4 @@ qdrant_local/
 *.sqlite
 data/
 logs/
-q
+Generated_markdowns/

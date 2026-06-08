@@ -22,7 +22,7 @@ EMBEDDING_MODEL    = "text-embedding-3-large"
 VECTOR_DIM         = 3072
 COLLECTION_NAME    = "hotel_contracts"
 QDRANT_PATH        = "./qdrant_local"
-MD_DIR             = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+MD_DIR             = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\Generated_markdowns")
 BATCH_SIZE         = 50
 
 # ── Clients ─────────────────────────────────────────────────

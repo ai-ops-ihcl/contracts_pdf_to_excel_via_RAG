@@ -17,7 +17,7 @@ QDRANT_PATH     = "./qdrant_local"
 COLLECTION_NAME = "hotel_contracts"
 
 # ── Change this to any file you want to inspect ─────────────
-FILE_NAME = "(HMA) Gateway Tirupati Thanapalli (07-Mar-2026_09-09_AM_IST).md"
+FILE_NAME = "(HMA) 000249 - Umaid Bhawan Palace Jodhpur - Hotel Operating Agreement (25-Jan-2026_11-07_AM_IST).md"
 
 # ─────────────────────────────────────────────────────────────
 

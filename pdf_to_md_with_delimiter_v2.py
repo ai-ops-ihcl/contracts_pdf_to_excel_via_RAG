@@ -182,8 +182,8 @@ def pdf_to_chunked_markdown(pdf_path: str) -> str:
 # STEP 4 — BATCH RUN
 # ─────────────────────────────────────────────────────────────
 
-INPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_217")
-OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\pymupdf_markdowns")
+INPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\contract_summary_223")
+OUTPUT_DIR = Path(r"C:\Users\bipin_kes\OneDrive\Desktop\pdf_to_md\Generated_markdowns")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 for pdf_path in INPUT_DIR.glob("*.pdf"):
